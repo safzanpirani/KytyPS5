@@ -192,6 +192,7 @@ endif()
 option(KYTY_BUILD_LAUNCHER "Build Qt launcher" ON)
 
 config_compiler_and_linker()
+config_kyty_optimization()
 
 add_subdirectory("${KYTY_THIRD_PARTY_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/3rdparty")
 add_subdirectory("${KYTY_SOURCE_DIR}/common" "${CMAKE_CURRENT_BINARY_DIR}/common")
@@ -795,3 +796,12 @@ endif()
 if(KYTY_CLANG_CL)
 	install(FILES "${KYTY_THIRD_PARTY_DIR}/winpthread/bin/libwinpthread-1.dll" DESTINATION .)
 endif()
+
+# Apply opt-in tuning to first-party code and tests, leaving dependencies alone.
+get_property(kyty_root_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(kyty_target IN LISTS kyty_root_targets)
+	get_target_property(kyty_target_type ${kyty_target} TYPE)
+	if(kyty_target_type STREQUAL "EXECUTABLE" OR kyty_target_type STREQUAL "STATIC_LIBRARY")
+		configure_kyty_optimization(${kyty_target})
+	endif()
+endforeach()

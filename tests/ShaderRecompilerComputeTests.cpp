@@ -38652,6 +38652,8 @@ void CheckPm4CeCompletion(RenderContext &renderer) {
   std::printf("[host]    %-32s ok\n", "Pm4CeCompletion");
 }
 
+#include "perf/build-pgo/ShaderCompileBenchmark.inc"
+
 } // namespace
 } // namespace Libs::Graphics
 
@@ -38661,6 +38663,14 @@ int main(int argc, char **argv) {
   std::setvbuf(stdout, nullptr, _IONBF, 0);
   EnsureConfigInitialized();
   CheckLeastRecentlyUsedCacheOrdering();
+  if (argc == 2 && std::strcmp(argv[1], "--benchmark-shader-train") == 0) {
+    RunShaderCompileBenchmark(true);
+    return 0;
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--benchmark-shader-holdout") == 0) {
+    RunShaderCompileBenchmark(false);
+    return 0;
+  }
   if (argc == 2 && std::strcmp(argv[1], "--thread-dimensions-only") == 0) {
     VulkanHarness vulkan;
     CheckComputeThreadDimensions(vulkan);
