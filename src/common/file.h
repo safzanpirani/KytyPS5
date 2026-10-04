@@ -69,7 +69,8 @@ public:
 
 	void GetLastAccessAndWriteTimeUTC(DateTime* access, DateTime* write);
 
-	void Read(void* data, uint32_t size, uint32_t* bytes_read = nullptr);
+	// EOF and short reads succeed; false indicates a native I/O failure.
+	bool Read(void* data, uint32_t size, uint32_t* bytes_read = nullptr);
 	void Write(const void* data, uint32_t size, uint32_t* bytes_written = nullptr);
 
 	void Printf(const char* format, ...) KYTY_FORMAT_PRINTF(2, 3);

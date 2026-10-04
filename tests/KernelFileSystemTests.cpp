@@ -33,6 +33,13 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace Libs::LibKernelApr {
 void InitLibKernel_1_Apr(Loader::SymbolDatabase *symbols);
 }
@@ -140,6 +147,53 @@ void TestSaveOpenVisibility() {
   Check(FileSystem::KernelStat(Path, &stat) == OK && stat.st_size == 0,
         "save truncation is visible before close");
   Check(FileSystem::KernelClose(truncated) == OK, "close truncated save file");
+}
+
+void TestReadErrors(const std::filesystem::path& root) {
+	constexpr char Path[]    = "/savedata0/read-errors.dat";
+	constexpr char Payload[] = "read failure fixture";
+	const int      writer    = FileSystem::KernelOpen(Path, 0x601, 0777);
+	Check(writer >= 3, "create read error fixture");
+	Check(FileSystem::KernelWrite(writer, Payload, sizeof(Payload)) == sizeof(Payload),
+	      "populate read error fixture");
+	std::array<char, sizeof(Payload)> output {};
+	Check(FileSystem::KernelRead(writer, output.data(), output.size()) ==
+	          Libs::LibKernel::KERNEL_ERROR_EBADF,
+	      "read rejects write-only descriptor");
+	Check(FileSystem::KernelPread(writer, output.data(), output.size(), 0) ==
+	          Libs::LibKernel::KERNEL_ERROR_EBADF,
+	      "pread rejects write-only descriptor");
+	Check(FileSystem::KernelClose(writer) == OK, "close read error writer");
+#if defined(_WIN32)
+	const int reader = FileSystem::KernelOpen(Path, 0, 0);
+	Check(reader >= 3, "open read error reader");
+	const auto native_path = root / "read-errors.dat";
+	HANDLE     locker      = CreateFileW(native_path.c_str(), GENERIC_READ | GENERIC_WRITE,
+	                                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+	                                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	Check(locker != INVALID_HANDLE_VALUE, "open byte range lock owner");
+	OVERLAPPED offset {};
+	Check(LockFileEx(locker, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0,
+	                 sizeof(Payload), 0, &offset),
+	      "lock read error range");
+	Check(FileSystem::KernelRead(reader, output.data(), output.size()) ==
+	          Libs::LibKernel::KERNEL_ERROR_EIO,
+	      "read propagates host read failure");
+	Check(FileSystem::KernelPread(reader, output.data(), output.size(), 0) ==
+	          Libs::LibKernel::KERNEL_ERROR_EIO,
+	      "pread propagates host read failure");
+	FileSystem::KernelIovec iov {output.data(), output.size()};
+	Check(FileSystem::KernelPreadv(reader, &iov, 1, 0) == Libs::LibKernel::KERNEL_ERROR_EIO,
+	      "preadv propagates host read failure");
+	Check(UnlockFileEx(locker, 0, sizeof(Payload), 0, &offset), "unlock read error range");
+	CloseHandle(locker);
+	Check(FileSystem::KernelRead(reader, output.data(), output.size()) == output.size() &&
+	          std::memcmp(output.data(), Payload, sizeof(Payload)) == 0,
+	      "read recovers after transient host failure");
+	Check(FileSystem::KernelRead(reader, output.data(), output.size()) == 0,
+	      "read distinguishes EOF from failure");
+	Check(FileSystem::KernelClose(reader) == OK, "close read error reader");
+#endif
 }
 
 void TestAioBatches() {
@@ -1153,6 +1207,7 @@ int main(int, char**) {
   CheckAprPaths(temporary.Path());
   FileSystem::Mount(temporary.Path(), "/savedata0");
   TestSaveOpenVisibility();
+  TestReadErrors(temporary.Path());
   TestAioBatches();
   CheckSaveRename(temporary.Path(), "first-save");
   CheckSaveRename(temporary.Path(), "replacement-save");

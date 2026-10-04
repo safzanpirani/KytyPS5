@@ -63,13 +63,17 @@ static DWORD GetCacheAccessType(sys_file_cache_type_t t) {
 	return FILE_ATTRIBUTE_NORMAL;
 }
 
-void SysFileRead(void* data, uint32_t size, sys_file_t& f, uint32_t* bytes_read) {
+bool SysFileRead(void* data, uint32_t size, sys_file_t& f, uint32_t* bytes_read) {
+	if (bytes_read != nullptr) {
+		*bytes_read = 0;
+	}
 	if (f.type == SYS_FILE_FILE) {
-		DWORD w = 0;
-		ReadFile(f.handle, data, size, &w, nullptr);
+		DWORD      w  = 0;
+		const bool ok = ReadFile(f.handle, data, size, &w, nullptr) != 0;
 		if (bytes_read != nullptr) {
 			*bytes_read = w;
 		}
+		return ok;
 	} else if (f.type == SYS_FILE_MEMORY_STAT) {
 		uint32_t s = size;
 		if (f.buf->size != 0u) {
@@ -98,7 +102,10 @@ void SysFileRead(void* data, uint32_t size, sys_file_t& f, uint32_t* bytes_read)
 		if (bytes_read != nullptr) {
 			*bytes_read = s;
 		}
+	} else {
+		return false;
 	}
+	return true;
 }
 
 void SysFileWrite(const void* data, uint32_t size, sys_file_t& f, uint32_t* bytes_written) {

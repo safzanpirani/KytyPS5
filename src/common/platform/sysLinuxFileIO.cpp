@@ -81,12 +81,17 @@ static void apply_cache_hint(FILE* f, sys_file_cache_type_t cache_type) {
 #endif
 }
 
-void SysFileRead(void* data, uint32_t size, sys_file_t& f, uint32_t* bytes_read) {
+bool SysFileRead(void* data, uint32_t size, sys_file_t& f, uint32_t* bytes_read) {
+	if (bytes_read != nullptr) {
+		*bytes_read = 0;
+	}
 	if (f.type == SYS_FILE_FILE) {
+		clearerr(f.f);
 		size_t w = fread(data, 1, size, f.f);
 		if (bytes_read != nullptr) {
 			*bytes_read = w;
 		}
+		return ferror(f.f) == 0;
 	} else if (f.type == SYS_FILE_MEMORY_STAT) {
 		uint32_t s = size;
 		if (f.buf->size != 0) {
@@ -115,7 +120,10 @@ void SysFileRead(void* data, uint32_t size, sys_file_t& f, uint32_t* bytes_read)
 		if (bytes_read != nullptr) {
 			*bytes_read = s;
 		}
+	} else {
+		return false;
 	}
+	return true;
 }
 
 void SysFileWrite(const void* data, uint32_t size, sys_file_t& f, uint32_t* bytes_written) {

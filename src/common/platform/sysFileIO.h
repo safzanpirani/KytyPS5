@@ -24,8 +24,8 @@ struct sys_dir_entry_t {
 	bool        is_file;
 };
 
-void        SysFileRead(void* data, uint32_t size, sys_file_t& f,
-                        uint32_t* bytes_read = nullptr); // NOLINT(google-runtime-references)
+bool              SysFileRead(void* data, uint32_t size, sys_file_t& f,
+                              uint32_t* bytes_read = nullptr); // NOLINT(google-runtime-references)
 void        SysFileWrite(const void* data, uint32_t size, sys_file_t& f,
                          uint32_t* bytes_written = nullptr); // NOLINT(google-runtime-references)
 sys_file_t* SysFileCreate(const std::filesystem::path& file_name);

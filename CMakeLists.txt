@@ -492,6 +492,15 @@ add_executable(ngs2_sampler_tests EXCLUDE_FROM_ALL
 target_link_libraries(ngs2_sampler_tests common fmt::fmt LibAtrac9)
 target_include_directories(ngs2_sampler_tests PRIVATE ${inc_headers})
 
+# BEGIN audio-io benchmarks and regression tests
+add_executable(audio_io_file_read_tests EXCLUDE_FROM_ALL "tests/perf/audio-io/FileReadTests.cpp")
+target_link_libraries(audio_io_file_read_tests common)
+target_include_directories(audio_io_file_read_tests PRIVATE ${inc_headers})
+if(BUILD_TESTING)
+	add_test(NAME audio_io_file_read COMMAND $<TARGET_FILE:audio_io_file_read_tests>)
+endif()
+# END audio-io benchmarks and regression tests
+
 add_executable(pad_haptics_tests EXCLUDE_FROM_ALL
 	"${KYTY_TESTS_DIR}/PadHapticsTests.cpp"
 )
