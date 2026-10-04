@@ -5,8 +5,11 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
+#include <future>
 #include <memory>
 #include <vector>
 
@@ -32,6 +35,7 @@ bool                                 fail_open = false, fail_put = false, stalle
 bool                                 pad_connected = false, pad_bluetooth = false;
 uint64_t                             pad_queue_us = 0;
 int                                  clears = 0;
+std::function<void()>                put_hook;
 
 Stream& GetStream(SDL_AudioStream* stream) {
 	return *reinterpret_cast<Stream*>(stream);
@@ -89,6 +93,7 @@ bool PutAudioStreamData(SDL_AudioStream* stream, const void*, int bytes) {
 	Drain(state);
 	state.frames += static_cast<uint64_t>(bytes) * 1000000 /
 	                (SDL_AUDIO_BYTESIZE(state.spec.format) * state.spec.channels);
+	if (put_hook) put_hook();
 	return true;
 }
 
@@ -386,9 +391,50 @@ void TestZeroOutputFrequency() {
 	      "internal output open accepted zero frequency");
 	Check(f.Open().ToInt() == 1, "rejected output port occupied a handle");
 }
+
+void TestOutputCloseLifetime(bool observe) {
+	int protected_outputs = 0;
+	for (int repetition = 0; repetition < 5; ++repetition) {
+		Fixture            f;
+		const auto         port = f.Open();
+		std::promise<void> closing;
+		std::future<bool>  closed;
+		put_hook = [&] {
+			closed = std::async(std::launch::async, [&] {
+				closing.set_value();
+				return f.audio.AudioOutClose(port);
+			});
+			closing.get_future().wait();
+			protected_outputs +=
+			    closed.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout;
+		};
+		Audio::OutputParam param {port, f.pcm.data()};
+		const auto         samples = f.audio.AudioOutOutputs(&param, 1, false);
+		put_hook                   = {};
+		Check(closed.get(), "concurrent close failed");
+		Check(observe || samples == 256, "close changed an in-flight output's sample count");
+	}
+	std::printf("AudioOutTimingTests: protected_outputs=%d/5\n", protected_outputs);
+	Check(observe || protected_outputs == 5, "close destroyed a stream during output");
+}
+
+void BenchmarkOutput() {
+	Fixture    f;
+	const auto port = f.Open();
+	for (int repetition = 0; repetition < 5; ++repetition) {
+		const auto start = std::chrono::steady_clock::now();
+		for (int i = 0; i < 100000; ++i)
+			f.Output(port, false);
+		const auto ns =
+		    std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - start)
+		        .count() /
+		    100000;
+		std::printf("audio_output,%d,%.3f\n", repetition, ns);
+	}
+}
 } // namespace
 
-int main() {
+int main(int argc, char**) {
 	TestPrimingAndSteadyCadence();
 	TestUnderrunAndStalledQueueRecovery();
 	TestFallbackClockAndLongGap();
@@ -399,6 +445,8 @@ int main() {
 	TestControllerSpeakerPacing();
 	TestInvalidBatchSize();
 	TestZeroOutputFrequency();
+	TestOutputCloseLifetime(argc > 1);
+	BenchmarkOutput();
 	Check(streams.empty(), "output stream leaked");
 	std::puts("AudioOutTimingTests: all cases passed");
 }

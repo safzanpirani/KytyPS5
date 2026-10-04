@@ -546,77 +546,89 @@ bool Audio::AudioOutSetVolume(Id handle, uint32_t bitflag, const int* volume) {
 
 uint32_t Audio::AudioOutOutputs(OutputParam* params, uint32_t num, bool blocking) {
 	EXIT_NOT_IMPLEMENTED(num == 0 || num > OUT_PORTS_MAX);
-	EXIT_NOT_IMPLEMENTED(!AudioOutValid(params[0].handle));
-
-	const auto&                     first_port = m_out_ports[params[0].handle.GetId()];
-	std::array<bool, OUT_PORTS_MAX> paced {};
-	bool                            any_device = false;
-	uint64_t                        deadline   = 0;
-
-	for (uint32_t i = 0; i < num; i++) {
-		auto& port = m_out_ports[params[i].handle.GetId()];
-		const float gain =
-		    port.type == AUDIO_OUT_PORT_TYPE_PADSPK
-		        ? Controller::GetSettingScale(Controller::Setting::SpeakerVolume)
-		    : port.type == AUDIO_OUT_PORT_TYPE_VIBRATION
-		        ? Controller::GetSettingScale(Controller::Setting::VibrationIntensity)
-		        : 1.0f;
-
-		uint64_t controller_queued_us = 0;
-		bool controller_uses_bluetooth = false;
-		if (port.haptics != nullptr) {
-			// Keep the stream alive against close and volume changes.
-			Common::LockGuard lock(m_mutex);
-			controller_queued_us = Controller::DualSenseHaptics::Queue(
-			    port.haptics, Controller::GetActiveControllerId(), params[i].data, port.samples_num,
-			    static_cast<uint32_t>(port.channels_num), FormatIsFloat(port.format), port.volume,
-			    gain);
-			controller_uses_bluetooth =
-			    Controller::DualSenseHaptics::UsesBluetooth(port.haptics);
-		}
-		if (controller_queued_us == 0) {
-			// No DualSense took it (e.g. it was unplugged); a pad speaker port plays on the main
-			// output instead, and a vibration port has none.
-			if (QueueSdlAudio(&port, params[i].data, blocking, gain)) {
-				any_device = true;
-				paced[i]   = port.queue_primed;
+	uint32_t samples  = 0;
+	uint64_t sleep_us = 0;
+	{
+		Common::LockGuard lock(m_mutex);
+		// Validate the entire batch while holding the same lock as close and volume changes.
+		for (uint32_t i = 0; i < num; ++i) {
+			if (!AudioOutValid(params[i].handle)) {
+				return AUDIO_OUT_ERROR_INVALID_PORT;
 			}
-		} else {
-			port.queue_primed = false;
-			// Bluetooth HID has its own sender. Let the sample clock pace a batch
-			// without another audio device, instead of waiting on the HID queue.
-			if (port.type == AUDIO_OUT_PORT_TYPE_PADSPK && !controller_uses_bluetooth) {
-				any_device = true;
-				if (blocking && controller_queued_us > AUDIO_OUT_TARGET_LATENCY_US) {
-					// Limit a stalled USB endpoint to one audio block of waiting.
-					const uint64_t block_us = 1000000ULL * port.samples_num / port.freq;
-					deadline = std::max(deadline, LibKernel::KernelGetProcessTime() +
-					                                  std::min(controller_queued_us - AUDIO_OUT_TARGET_LATENCY_US,
-					                                           block_us));
+		}
+
+		const auto&                     first_port = m_out_ports[params[0].handle.GetId()];
+		std::array<bool, OUT_PORTS_MAX> paced {};
+		bool                            any_device = false;
+		uint64_t                        deadline   = 0;
+
+		for (uint32_t i = 0; i < num; i++) {
+			auto&       port = m_out_ports[params[i].handle.GetId()];
+			const float gain =
+			    port.type == AUDIO_OUT_PORT_TYPE_PADSPK
+			        ? Controller::GetSettingScale(Controller::Setting::SpeakerVolume)
+			    : port.type == AUDIO_OUT_PORT_TYPE_VIBRATION
+			        ? Controller::GetSettingScale(Controller::Setting::VibrationIntensity)
+			        : 1.0f;
+
+			uint64_t controller_queued_us      = 0;
+			bool     controller_uses_bluetooth = false;
+			if (port.haptics != nullptr) {
+				controller_queued_us = Controller::DualSenseHaptics::Queue(
+				    port.haptics, Controller::GetActiveControllerId(), params[i].data,
+				    port.samples_num, static_cast<uint32_t>(port.channels_num),
+				    FormatIsFloat(port.format), port.volume, gain);
+				controller_uses_bluetooth =
+				    Controller::DualSenseHaptics::UsesBluetooth(port.haptics);
+			}
+			if (controller_queued_us == 0) {
+				// No DualSense took it (e.g. it was unplugged); a pad speaker port plays on the
+				// main output instead, and a vibration port has none.
+				if (QueueSdlAudio(&port, params[i].data, blocking, gain)) {
+					any_device = true;
+					paced[i]   = port.queue_primed;
+				}
+			} else {
+				port.queue_primed = false;
+				// Bluetooth HID has its own sender. Let the sample clock pace a batch
+				// without another audio device, instead of waiting on the HID queue.
+				if (port.type == AUDIO_OUT_PORT_TYPE_PADSPK && !controller_uses_bluetooth) {
+					any_device = true;
+					if (blocking && controller_queued_us > AUDIO_OUT_TARGET_LATENCY_US) {
+						// Limit a stalled USB endpoint to one audio block of waiting.
+						const uint64_t block_us = 1000000ULL * port.samples_num / port.freq;
+						deadline = std::max(deadline, LibKernel::KernelGetProcessTime() +
+						                                  std::min(controller_queued_us -
+						                                               AUDIO_OUT_TARGET_LATENCY_US,
+						                                           block_us));
+					}
 				}
 			}
 		}
+
+		// Submit the whole batch before pacing it. Audible devices own its cadence while
+		// priming; silent/vibration-only batches use the same sample clock as SDL output.
+		const auto now = LibKernel::KernelGetProcessTime();
+		for (uint32_t i = 0; i < num; i++) {
+			auto& port = m_out_ports[params[i].handle.GetId()];
+			if (blocking && (paced[i] || !any_device)) {
+				deadline = std::max(deadline, port.clock.Advance(now, port.samples_num, port.freq));
+			} else {
+				port.clock = {};
+			}
+			if (!blocking) {
+				port.queue_primed = false;
+			}
+		}
+		samples  = first_port.samples_num;
+		sleep_us = deadline > now ? deadline - now : 0;
+	}
+	// The pacing wait no longer touches a port and must not delay close or volume updates.
+	if (sleep_us != 0) {
+		Common::Thread::SleepMicro(sleep_us);
 	}
 
-	// Submit the whole batch before pacing it. Audible devices own its cadence while
-	// priming; silent/vibration-only batches use the same sample clock as SDL output.
-	const auto now = LibKernel::KernelGetProcessTime();
-	for (uint32_t i = 0; i < num; i++) {
-		auto& port = m_out_ports[params[i].handle.GetId()];
-		if (blocking && (paced[i] || !any_device)) {
-			deadline = std::max(deadline, port.clock.Advance(now, port.samples_num, port.freq));
-		} else {
-			port.clock = {};
-		}
-		if (!blocking) {
-			port.queue_primed = false;
-		}
-	}
-	if (deadline > now) {
-		Common::Thread::SleepMicro(deadline - now);
-	}
-
-	return first_port.samples_num;
+	return samples;
 }
 
 static bool RecordingDevicePresent(SDL_AudioDeviceID device) {
