@@ -12,6 +12,7 @@
 #include "graphics/host_gpu/renderer/depthRenderTarget.h"
 #include "graphics/host_gpu/renderer/image/imageView.h"
 #include "graphics/host_gpu/renderer/pipeline/blendMapping.h"
+#include "graphics/host_gpu/renderer/pipeline/shaderCacheStats.h"
 #include "graphics/host_gpu/renderer/render.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
 #include "graphics/shader/recompiler/ShaderRecompiler.h"
@@ -369,19 +370,19 @@ struct PipelineCache::ProgramCache {
 		input_info.stage = {.program = &permutation.program, .resources = &entry->second.resources};
 		permutation.program.bindings.AdvancePushData(push_data_cursor);
 
-		std::array<size_t, static_cast<size_t>(ShaderType::TessellationEvaluation) + 1> counts {};
-		for (const auto& [key, source]: programs) {
-			counts[static_cast<size_t>(key.stage)] += source.permutations.size();
+		stats.Record(stage);
+		if (!Log::IsSilent() && stats.ShouldReport(ShaderCacheStats::Clock::now())) {
+			const auto& counts = stats.counts;
+			// Guest geometry shaders are compiled through the host mesh stage.
+			LOGF("Shaders: VS %zu | PS %zu | CS %zu | GS %zu | LS %zu | HS %zu | TES %zu\n",
+			     counts[static_cast<size_t>(ShaderType::Vertex)],
+			     counts[static_cast<size_t>(ShaderType::Pixel)],
+			     counts[static_cast<size_t>(ShaderType::Compute)],
+			     counts[static_cast<size_t>(ShaderType::Mesh)],
+			     counts[static_cast<size_t>(ShaderType::Local)],
+			     counts[static_cast<size_t>(ShaderType::TessellationControl)],
+			     counts[static_cast<size_t>(ShaderType::TessellationEvaluation)]);
 		}
-		// Guest geometry shaders are compiled through the host mesh stage.
-		std::printf("Shaders: VS %zu | PS %zu | CS %zu | GS %zu | LS %zu | HS %zu | TES %zu\n",
-		            counts[static_cast<size_t>(ShaderType::Vertex)],
-		            counts[static_cast<size_t>(ShaderType::Pixel)],
-		            counts[static_cast<size_t>(ShaderType::Compute)],
-		            counts[static_cast<size_t>(ShaderType::Mesh)],
-		            counts[static_cast<size_t>(ShaderType::Local)],
-		            counts[static_cast<size_t>(ShaderType::TessellationControl)],
-		            counts[static_cast<size_t>(ShaderType::TessellationEvaluation)]);
 		return permutation.handle;
 	}
 
@@ -401,6 +402,7 @@ struct PipelineCache::ProgramCache {
 	ProgramKey                                                  lookup_key;
 	vk::Device                                                  device;
 	uint64_t                                                    next_shader_id = 0;
+	ShaderCacheStats                                            stats;
 };
 
 PipelineCache::PipelineCache(GraphicContext& graphics)

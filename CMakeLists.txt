@@ -553,6 +553,16 @@ add_executable(image_page_table_tests EXCLUDE_FROM_ALL
 target_link_libraries(image_page_table_tests common fmt::fmt)
 target_include_directories(image_page_table_tests PRIVATE ${inc_headers})
 
+# BEGIN pipeline-bindings isolated CPU benchmark and regression tests
+add_executable(pipeline_cache_bench EXCLUDE_FROM_ALL
+	"${KYTY_TESTS_DIR}/perf/pipeline-bindings/cacheBench.cpp")
+target_link_libraries(pipeline_cache_bench common fmt::fmt)
+target_include_directories(pipeline_cache_bench PRIVATE ${inc_headers})
+if(BUILD_TESTING)
+	add_test(NAME pipeline_cache_cpu COMMAND pipeline_cache_bench --test)
+endif()
+# END pipeline-bindings isolated CPU benchmark and regression tests
+
 add_kyty_full_emulator_test(shader_recompiler_compute_tests "${KYTY_TESTS_DIR}/ShaderRecompilerComputeTests.cpp")
 
 set(gpu_test_generated_dir "${PROJECT_BINARY_DIR}/gpu_test_shaders")
