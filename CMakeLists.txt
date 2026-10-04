@@ -553,6 +553,19 @@ add_executable(image_page_table_tests EXCLUDE_FROM_ALL
 target_link_libraries(image_page_table_tests common fmt::fmt)
 target_include_directories(image_page_table_tests PRIVATE ${inc_headers})
 
+# BEGIN guest-memory-sync timer regression test
+if(WIN32)
+	add_executable(thread_timer_tests EXCLUDE_FROM_ALL
+		tests/perf/guest-memory-sync/ThreadTimerTests.cpp)
+	target_link_libraries(thread_timer_tests common)
+	target_include_directories(thread_timer_tests PRIVATE ${inc_headers})
+	if(BUILD_TESTING)
+		add_test(NAME thread_timer COMMAND thread_timer_tests)
+		set_tests_properties(thread_timer PROPERTIES TIMEOUT 30)
+	endif()
+endif()
+# END guest-memory-sync timer regression test
+
 add_kyty_full_emulator_test(shader_recompiler_compute_tests "${KYTY_TESTS_DIR}/ShaderRecompilerComputeTests.cpp")
 
 set(gpu_test_generated_dir "${PROJECT_BINARY_DIR}/gpu_test_shaders")
